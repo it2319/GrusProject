@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+*.egg
+.Python
+build/
+dist/
+pip-wheel-metadata/
+.eggs/
+
+# Testing & coverage
+.pytest_cache/
+.cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Type checking caches
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Flask instance folder
+instance/
+
+# IDE/editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Docker (optional override files)
+docker-compose.override.yml
+
+# Environment files (do not commit real secrets)
+.env
+.env.*
+!.env.example
+
+# SQLite databases and persisted data
+formdata.db
+/dbdata/
+/dbdata/**
+
+# Jupyter
+.ipynb_checkpoints/

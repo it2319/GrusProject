@@ -1,0 +1,159 @@
+{% macro flash_alert() %}
+    {% with messages = get_flashed_messages(with_categories=True) %}
+        {% if messages %}
+            {% for category, msg in messages %}
+                <div class="alert alert-{{ 'success' if category == 'success' else 'danger' }}">{{ msg }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+{% endmacro %}
+
+{% macro toast_success() %}
+    <div class="position-relative" aria-live="polite" aria-atomic="true">
+        <div class="toast-container position-static">
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}
+                    <div class="toast show align-items-center text-bg-success border-0 mb-3" role="status">
+                        <div class="d-flex">
+                            <div class="toast-body">
+                                <i class="bi bi-check-circle me-2"></i>{{ messages[0] }}
+                            </div>
+                            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                        </div>
+                    </div>
+                {% endif %}
+            {% endwith %}
+        </div>
+    </div>
+{% endmacro %}
+
+{% macro navbar_main(is_admin=False) %}
+    <nav class="navbar navbar-light sticky-top border-bottom">
+        <div class="container position-relative d-flex align-items-center justify-content-between">
+            <a href="{{ url_for('index') }}" class="navbar-brand mb-0 h1 brand text-decoration-none"><i class="bi bi-chat-right-text me-2"></i>FORM</a>
+
+            {% if session.get('user') %}
+                <div class="position-absolute start-50 translate-middle-x">
+                    <a href="{{ url_for('messages') }}" class="btn btn-primary btn-sm"><i class="bi bi-chat-dots me-1"></i>zprávy</a>
+                </div>
+            {% endif %}
+            <div class="position-fixed top-0 end-0 m-2 d-flex align-items-center gap-2">
+                {% if not is_admin %}
+                    {% if session.get('user') %}
+                        <span class="text-muted small">přihlášen jako <strong>{{ session.get('user') }}</strong></span>
+                        <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-box-arrow-right me-1"></i>Odhlásit</a>
+                    {% else %}
+                        <a href="{{ url_for('login') }}" class="btn btn-outline-primary btn-sm"><i class="bi bi-person me-1"></i>přihlášení</a>
+                        <a href="{{ url_for('register') }}" class="btn btn-outline-success btn-sm"><i class="bi bi-person-plus me-1"></i>registrovat</a>
+                    {% endif %}
+                {% endif %}
+
+                {% if is_admin %}
+                    <a href="{{ url_for('admin') }}" class="btn btn-outline-primary btn-sm"><i class="bi bi-shield-lock me-1"></i>Admin</a>
+                    <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-box-arrow-right me-1"></i>Odhlásit</a>
+                {% else %}
+                    <a href="{{ url_for('login_admin') }}" class="btn btn-primary btn-sm"><i class="bi bi-box-arrow-in-right me-1"></i>admin_přihlášení</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+{% endmacro %}
+
+{% macro navbar_admin() %}
+    <nav class="navbar navbar-light bg-light border-bottom">
+        <div class="container d-flex justify-content-between align-items-center">
+            <div>
+                <a class="navbar-brand text-decoration-none" href="{{ url_for('index') }}">← Formulář</a>
+            </div>
+            <div>
+                <a class="btn btn-outline-secondary btn-sm position-fixed top-0 end-0 m-2" href="{{ url_for('logout') }}">Odhlásit</a>
+            </div>
+        </div>
+    </nav>
+{% endmacro %}
+
+{% macro admin_table(items) %}
+    <div class="container py-4">
+        <h1 class="h4 mb-3">Odeslané zprávy</h1>
+        {% if items %}
+            <div class="table-responsive">
+                <table class="table table-striped align-middle">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Jméno</th>
+                            <th>Email</th>
+                            <th>Pohlaví</th>
+                            <th>Zpráva</th>
+                            <th>Akce</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for it in items %}
+                            <tr>
+                                <td>{{ loop.index }}</td>
+                                <td>{{ it.name }}</td>
+                                <td>{{ it.email }}</td>
+                                <td>{{ it.gender }}</td>
+                                <td class="text-truncate message-truncate">{{ it.message }}</td>
+                                <td>
+                                    <form method="POST" action="{{ url_for('delete_entry', entry_id=it.id) }}" onsubmit="return confirm('Smazat záznam #{{ it.id }}?');">
+                                        <button type="submit" class="btn btn-sm btn-danger">Smazat</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="alert alert-info">Zatím žádné záznamy.</div>
+        {% endif %}
+    </div>
+{% endmacro %}
+
+{% macro auth_cta() %}
+    <div class="d-flex justify-content-end mb-3 gap-2">
+        <a href="{{ url_for('login') }}" class="btn btn-outline-primary btn-sm"><i class="bi bi-person me-1"></i>přihlášení</a>
+        <a href="{{ url_for('register') }}" class="btn btn-outline-success btn-sm"><i class="bi bi-person-plus me-1"></i>registrovat</a>
+    </div>
+{% endmacro %}
+
+{% macro field_input(field, icon_class, placeholder='') %}
+    <div class="mb-3">
+        <label class="form-label">{{ field.label.text }}</label>
+        <div class="input-group">
+            <span class="input-group-text"><i class="{{ icon_class }}"></i></span>
+            {{ field(class_='form-control' + (' is-invalid' if field.errors else ''), placeholder=placeholder) }}
+            {% if field.errors %}
+                <div class="invalid-feedback">{{ field.errors[0] }}</div>
+            {% endif %}
+        </div>
+    </div>
+{% endmacro %}
+
+{% macro field_select(field, icon_class) %}
+    <div class="mb-3">
+        <label class="form-label">{{ field.label.text }}</label>
+        <div class="input-group">
+            <span class="input-group-text"><i class="{{ icon_class }}"></i></span>
+            {{ field(class_='form-select' + (' is-invalid' if field.errors else '')) }}
+            {% if field.errors %}
+                <div class="invalid-feedback">{{ field.errors[0] }}</div>
+            {% endif %}
+        </div>
+    </div>
+{% endmacro %}
+
+{% macro field_textarea(field, placeholder='', rows=5) %}
+    <div class="mb-3">
+        <label class="form-label">{{ field.label.text }}</label>
+        {{ field(class_='form-control' + (' is-invalid' if field.errors else ''), rows=rows, placeholder=placeholder) }}
+        <div class="d-flex justify-content-end mt-1">
+            <small class="char-counter" id="charCounter">0 znaků</small>
+        </div>
+        {% if field.errors %}
+            <div class="invalid-feedback d-block">{{ field.errors[0] }}</div>
+        {% endif %}
+    </div>
+{% endmacro %}

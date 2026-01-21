@@ -7,6 +7,9 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py ./
+COPY templates ./templates
+# Include static assets (CSS, images, etc.)
+COPY static ./static
 # SQLite databáze bude v /app (již implicitně)
 
 ENV FLASK_APP=app.py

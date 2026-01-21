@@ -3,14 +3,14 @@
 Jednoduchá Flask aplikace s formulářem (jméno, e‑mail, pohlaví, zpráva) ukládající data do perzistentní SQLite databáze a administrací pro zobrazení a mazání záznamů.
 
 ## Funkce
-- Formulářová stránka s poli: jméno, e‑mail, pohlaví (muž/žena), zpráva (počet znaků se zobrazuje), tlačítko odeslat se spinnerem.
-- Validace: povinná pole, e‑mail formát.
-- Post/Redirect/Get pattern (po uložení proběhne redirect, formulář se vyčistí).
-- Uložení dat do SQLite (`formdata.db`).
-- Automatické doplnění schématu (přidání sloupců `gender`, `message` pokud chybí).
-- Admin rozhraní (`/admin`) s přihlášením (`/login`, uživatelské jméno a heslo: `admin` / `admin` – pouze pro demo), výpisem záznamů (nejstarší nahoře, sekvenční číslování 1..N), mazáním jednotlivých záznamů a odhlášením.
-- Perzistence databáze přes bind mount souboru `formdata.db` mimo image.
-- Styling pomocí Bootstrap 5 a Bootstrap Icons.
+- Formulář: jméno, e‑mail, pohlaví (muž/žena), zpráva; počítadlo znaků a spinner při odeslání.
+- Validace: povinná pole, formát e‑mailu, přesměrování po úspěchu (PRG).
+- Ukládání do SQLite + auto‑migrace chybějících sloupců (`gender`, `message`).
+- Autentizace: registrace/přihlášení uživatele (username, email, gender, heslo hash), odhlášení.
+- Zprávy: vyhledávání uživatelů, seznam konverzací seřazený podle poslední zprávy, chat thread (moje vlevo/šedé, ostatní vpravo/modré) s časem pod bublinou.
+- Admin: přihlášení admina (demo `admin`/`admin`), výpis a mazání záznamů.
+- Šablony: Jinja makra pro komponenty (navbar, pole formuláře, alerty, toast, tabulka admina); externí CSS v `static/css/style.css`.
+- Docker Compose: perzistentní databáze přes mount adresáře `dbdata/`, port publikovaný na hostu `5001`.
 
 ## Struktura
 ```
@@ -18,23 +18,38 @@ app.py
 Dockerfile
 requirements.txt
 dbdata/            # host složka s perzistentní DB (formdata.db)
+docker-compose.yml
+templates/
+  auth/
+    login.html
+    register.html
+    login_admin.html
+  sites/
+    index.html
+    admin.html
+    messages.html
+  macros/
+    macros.html
+static/
+  css/
+    style.css
+.gitignore
+.env.example
 ```
 
 ## Technologie
-- Python + Flask + Flask-WTF + WTForms
-- SQLAlchemy ORM (SQLite)
-- Docker (python:3.10-slim)
-- Bootstrap 5 (CDN)
+- Jazyky: Python, HTML, CSS
+- Backend: Flask, Flask‑WTF/WTForms, Werkzeug (hashování hesla)
+- Databáze: SQLAlchemy ORM (SQLite)
+- Frontend: Bootstrap 5 + Bootstrap Icons, Jinja makra
+- Kontejnerizace: Docker + Docker Compose (python:3.10‑slim)
 
 ## Databáze a perzistence
-Databázový soubor je v kontejneru na cestě `/app/formdata.db`. Hostitel má adresář `dbdata/` a pomocí bind mountu se mapuje:
+Databázový soubor je v kontejneru v adresáři `/app/dbdata/` (`formdata.db`). Doporučené je mountovat celý adresář kvůli kompatibilitě napříč OS:
 ```
--v $(pwd)/dbdata/formdata.db:/app/formdata.db
+-v $(pwd)/dbdata:/app/dbdata
 ```
-Pokud soubor na hostiteli neexistuje, vytvořte ho prázdný:
-```
-touch dbdata/formdata.db
-```
+V Docker Compose je toto již nastaveno a aplikace používá `SQLALCHEMY_DATABASE_URI=sqlite:///dbdata/formdata.db` přes proměnnou prostředí.
 
 ## Build a běh (Docker)
 V kořenovém adresáři projektu:
@@ -45,7 +60,8 @@ docker build -t flask-form-app .
 # Spuštění (mapování portu 5001->5000 a perzistence DB)
 docker run -d --name flask-form-app \
   -p 5001:5000 \
-  -v $(pwd)/dbdata/formdata.db:/app/formdata.db \
+  -e SQLALCHEMY_DATABASE_URI=sqlite:///dbdata/formdata.db \
+  -v $(pwd)/dbdata:/app/dbdata \
   flask-form-app
 
 # Kontrola běhu
@@ -59,6 +75,38 @@ docker stop flask-form-app
 docker start flask-form-app
 ```
 Aplikace pak poslouchá na adrese: http://localhost:5001
+
+## Docker Compose
+Pro jednodušší spuštění použijte Docker Compose:
+```bash
+docker compose up --build
+```
+Kompozice:
+- Mapuje port `5001:5000`
+- Mountuje adresář `dbdata/` do kontejneru na `/app/dbdata`
+- Nastaví `SQLALCHEMY_DATABASE_URI` na `sqlite:///dbdata/formdata.db`
+
+Pokud se kontejner ukončí s Exit Code 1, zkontrolujte logy:
+```bash
+docker compose logs -f web
+```
+Častá příčina na Windows: mountoval se neexistující soubor místo adresáře a SQLite neotevřela databázi. Řešením je výše uvedené mountování celého adresáře `dbdata/`.
+
+## LAN přístup
+- Zjistěte IP adresu hostitele (Windows): `ipconfig` → IPv4 adresa aktivního adaptéru.
+- Otevřete z jiného zařízení v LAN: `http://<host-ip>:5001/` (např. `http://192.168.1.50:5001/`).
+- Windows: nastavte profil sítě na Soukromá (Private) a povolte příchozí TCP port 5001 v Bráně Windows Defender.
+  - PowerShell (spuštěný jako správce):
+    - `Set-NetConnectionProfile -InterfaceAlias "Ethernet" -NetworkCategory Private`
+    - `New-NetFirewallRule -DisplayName "Flask 5001 Inbound (Private)" -Direction Inbound -LocalPort 5001 -Protocol TCP -Action Allow -Profile Private`
+- Používejte `http://` (ne `https://`) pokud nemáte reverzní proxy s TLS.
+
+## Konfigurace prostředí (.env)
+- Konfigurace se načítá z proměnných prostředí. Vzorová konfigurace je v [.env.example](.env.example).
+- Vytvořte `.env` (nekontroluje se do Git díky [.gitignore](.gitignore)) a nastavte:
+  - `SECRET_KEY` – tajný klíč Flasku
+  - `SQLALCHEMY_DATABASE_URI=sqlite:///dbdata/formdata.db`
+  - `FLASK_APP=app.py`, `FLASK_RUN_HOST=0.0.0.0`, `FLASK_RUN_PORT=5000`
 
 ## Vývoj lokálně bez Dockeru (volitelně)
 ```bash

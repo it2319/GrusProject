@@ -1,18 +1,29 @@
-from flask import Flask, render_template_string, request, flash, redirect, url_for, session, abort
+from flask import Flask, render_template_string, render_template, request, flash, redirect, url_for, session, abort
 from flask_wtf import FlaskForm
-from wtforms import StringField, SubmitField, SelectField, TextAreaField
-from wtforms.validators import DataRequired, Email
+from wtforms import StringField, SubmitField, SelectField, TextAreaField, PasswordField
+from wtforms.validators import DataRequired, Email, ValidationError
 import os
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import text
+from sqlalchemy import text, or_, and_
+from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'tajnykey')
 app.config['WTF_CSRF_ENABLED'] = False
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///formdata.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('SQLALCHEMY_DATABASE_URI', 'sqlite:///formdata.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SESSION_PERMANENT'] = False  # odhlášení po zavření prohlížeče (session cookie)
 db = SQLAlchemy(app)
+
+# Preload Jinja macros and expose as global `ui` for templates
+with app.app_context():
+    try:
+        ui_module = app.jinja_env.get_template('macros/macros.html').make_module({})
+        app.jinja_env.globals['ui'] = ui_module
+    except Exception:
+        # If macros are missing during early import, continue; templates may import directly
+        pass
 
 class FormData(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -21,12 +32,54 @@ class FormData(db.Model):
     gender = db.Column(db.String(10), nullable=False)
     message = db.Column(db.Text, nullable=False)
 
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(128), unique=True, nullable=False)
+    email = db.Column(db.String(128), nullable=False)
+    gender = db.Column(db.String(10), nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    sender_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    receiver_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
 class MyForm(FlaskForm):
     name = StringField('Jméno', validators=[DataRequired(message="Jméno je povinné")])
     email = StringField('Email', validators=[DataRequired(message="Email je povinný"), Email(message="Neplatný email")])
     gender = SelectField('Pohlaví', choices=[('muž', 'Muž'), ('žena', 'Žena')], validators=[DataRequired(message="Pohlaví je povinné")])
     message = TextAreaField('Zpráva', validators=[DataRequired(message="Zpráva je povinná")])
     submit = SubmitField('Odeslat')
+
+class LoginForm(FlaskForm):
+    username = StringField('Uživatelské jméno', validators=[DataRequired(message="Uživatelské jméno je povinné")])
+    password = PasswordField('Heslo', validators=[DataRequired(message="Heslo je povinné")])
+    submit = SubmitField('Přihlásit')
+
+class RegisterForm(FlaskForm):
+    username = StringField('Uživatelské jméno', validators=[DataRequired(message="Uživatelské jméno je povinné")])
+    email = StringField('Email', validators=[DataRequired(message="Email je povinný"), Email(message="Neplatný email")])
+    gender = SelectField('Pohlaví', choices=[('muž', 'Muž'), ('žena', 'Žena')], validators=[DataRequired(message="Pohlaví je povinné")])
+    password = PasswordField('Heslo', validators=[DataRequired(message="Heslo je povinné")])
+    submit = SubmitField('Registrovat')
+
+    def validate_username(self, field):
+        if User.query.filter_by(username=field.data).first():
+            raise ValidationError('Uživatelské jméno je již použito')
+
+    def validate_email(self, field):
+        if User.query.filter_by(email=field.data).first():
+            raise ValidationError('Email je již použit')
+
+class MessageForm(FlaskForm):
+    message = TextAreaField('Zpráva', validators=[DataRequired(message="Zpráva je povinná")])
+    submit = SubmitField('Odeslat')
+
+class SearchForm(FlaskForm):
+    q = StringField('Hledat', validators=[DataRequired(message="Zadejte uživatelské jméno")])
+    submit = SubmitField('Hledat')
 
 TEMPLATE = '''
 <!doctype html>
@@ -58,7 +111,7 @@ TEMPLATE = '''
                                             <a href="{{ url_for('admin') }}" class="btn btn-outline-primary btn-sm me-2"><i class="bi bi-shield-lock me-1"></i>Admin</a>
                                             <a href="{{ url_for('logout') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-box-arrow-right me-1"></i>Odhlásit</a>
                                         {% else %}
-                                            <a href="{{ url_for('login') }}" class="btn btn-primary btn-sm"><i class="bi bi-box-arrow-in-right me-1"></i>Přihlásit</a>
+                                            <a href="{{ url_for('login_admin') }}" class="btn btn-primary btn-sm"><i class="bi bi-box-arrow-in-right me-1"></i>Přihlásit</a>
                                         {% endif %}
                                 </div>
                         </div>
@@ -187,65 +240,40 @@ TEMPLATE = '''
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
-    form = MyForm()
-    if form.validate_on_submit():
-        # Uložení do databáze
-        new_entry = FormData(
-            name=form.name.data,
-            email=form.email.data,
-            gender=form.gender.data,
-            message=form.message.data
-        )
-        db.session.add(new_entry)
-        db.session.commit()
-        flash('Formulář úspěšně odeslán')
-        # PRG pattern: po úspěchu přesměrovat na GET, aby se formulář vyprázdnil
-        return redirect(url_for('index'))
-    return render_template_string(TEMPLATE, form=form)
+    if session.get('user'):
+        form = MessageForm()
+        if form.validate_on_submit():
+            user = User.query.filter_by(username=session['user']).first()
+            if not user:
+                flash('Uživatel nenalezen', 'danger')
+                return redirect(url_for('logout'))
+            new_entry = FormData(
+                name=user.username,
+                email=user.email,
+                gender=user.gender,
+                message=form.message.data
+            )
+            db.session.add(new_entry)
+            db.session.commit()
+            flash('Zpráva úspěšně odeslána', 'success')
+            return redirect(url_for('index'))
+        return render_template('sites/index.html', form=form)
+    else:
+        form = MyForm()
+        if form.validate_on_submit():
+            new_entry = FormData(
+                name=form.name.data,
+                email=form.email.data,
+                gender=form.gender.data,
+                message=form.message.data
+            )
+            db.session.add(new_entry)
+            db.session.commit()
+            flash('Formulář úspěšně odeslán', 'success')
+            return redirect(url_for('index'))
+        return render_template('sites/index.html', form=form)
 
-# Login template
-LOGIN_TEMPLATE = '''
-<!doctype html>
-<html lang="cs">
-    <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Přihlášení</title>
-        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    </head>
-    <body class="bg-light">
-        <div class="container py-5">
-            <div class="row justify-content-center">
-                <div class="col-12 col-md-6 col-lg-4">
-                    <div class="card shadow-sm">
-                        <div class="card-body">
-                            <h1 class="h4 mb-4 text-center">Přihlášení administrátora</h1>
-                            {% with messages = get_flashed_messages() %}
-                                {% if messages %}
-                                    <div class="alert alert-danger">{{ messages[0] }}</div>
-                                {% endif %}
-                            {% endwith %}
-                              <form method="POST">
-                                <div class="mb-3">
-                                    <label class="form-label">Uživatelské jméno</label>
-                                  <input type="text" class="form-control" name="username" placeholder="Uživatelské jméno" required>
-                                </div>
-                                <div class="mb-3">
-                                    <label class="form-label">Heslo</label>
-                                  <input type="password" class="form-control" name="password" placeholder="Heslo" required>
-                                </div>
-                                <div class="d-grid">
-                                    <button class="btn btn-primary" type="submit">Přihlásit</button>
-                                </div>
-                            </form>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </body>
-    </html>
-'''
+# Login template moved to templates/auth/login_admin.html
 
 # Admin list template
 ADMIN_TEMPLATE = '''
@@ -311,42 +339,156 @@ ADMIN_TEMPLATE = '''
 '''
 
 def require_admin():
-        if not session.get('admin'):
-                return False
-        return True
+    if not session.get('admin'):
+        return False
+    return True
 
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-        if request.method == 'POST':
-                username = request.form.get('username', '')
-                password = request.form.get('password', '')
-                if username == 'admin' and password == 'admin':
-                        session['admin'] = True
-                        # Session cookie zůstane jen do zavření prohlížeče (SESSION_PERMANENT=False)
-                        return redirect(url_for('admin'))
-                flash('Neplatné přihlašovací údaje')
-        return render_template_string(LOGIN_TEMPLATE)
+@app.route('/login_admin', methods=['GET', 'POST'])
+def login_admin():
+    if request.method == 'POST':
+        username = request.form.get('username', '')
+        password = request.form.get('password', '')
+        if username == 'admin' and password == 'admin':
+            session['admin'] = True
+            # Session cookie zůstane jen do zavření prohlížeče (SESSION_PERMANENT=False)
+            return redirect(url_for('admin'))
+        flash('Neplatné přihlašovací údaje', 'danger')
+    return render_template('auth/login_admin.html')
 
 @app.route('/logout')
 def logout():
-        session.pop('admin', None)
-        return redirect(url_for('index'))
+    session.pop('admin', None)
+    session.pop('user', None)
+    return redirect(url_for('index'))
 
 @app.route('/admin')
 def admin():
     if not require_admin():
-        return redirect(url_for('login'))
+        return redirect(url_for('login_admin'))
     items = FormData.query.order_by(FormData.id.asc()).all()
-    return render_template_string(ADMIN_TEMPLATE, items=items)
+    return render_template('sites/admin.html', items=items)
 
 @app.route('/delete/<int:entry_id>', methods=['POST'])
 def delete_entry(entry_id):
-        if not require_admin():
-                return redirect(url_for('login'))
-        item = FormData.query.get_or_404(entry_id)
-        db.session.delete(item)
+    if not require_admin():
+        return redirect(url_for('login_admin'))
+    item = FormData.query.get_or_404(entry_id)
+    db.session.delete(item)
+    db.session.commit()
+    return redirect(url_for('admin'))
+
+@app.route('/messages', methods=['GET'])
+def messages():
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    form = SearchForm(request.args)
+    me = User.query.filter_by(username=session['user']).first()
+    results = []
+    # Build conversations list (users you've messaged with or who messaged you)
+    contacts = []
+    if me:
+        msgs = Message.query.filter(or_(Message.sender_id == me.id, Message.receiver_id == me.id)).order_by(Message.created_at.desc()).all()
+        latest_msg_map = {}
+        for m in msgs:
+            other_id = m.receiver_id if m.sender_id == me.id else m.sender_id
+            if other_id not in latest_msg_map:
+                latest_msg_map[other_id] = m
+        if latest_msg_map:
+            users = User.query.filter(User.id.in_(list(latest_msg_map.keys()))).all()
+            contacts = sorted(
+                (
+                    {"user": u, "preview": latest_msg_map[u.id].content, "time": latest_msg_map[u.id].created_at, "from_me": latest_msg_map[u.id].sender_id == me.id}
+                    for u in users
+                ),
+                key=lambda c: c["time"],
+                reverse=True,
+            )
+    if 'q' in request.args and form.validate():
+        q = form.q.data.strip()
+        if q:
+            results = User.query.filter(User.username.like(f"%{q}%"), User.username != session['user']).order_by(User.username.asc()).all()
+    return render_template('sites/messages.html', search=form, results=results, contacts=contacts, thread_user=None, messages=[], me_id=(me.id if me else None))
+
+@app.route('/messages/<username>', methods=['GET', 'POST'])
+def messages_thread(username):
+    if not session.get('user'):
+        return redirect(url_for('login'))
+    me = User.query.filter_by(username=session['user']).first()
+    other = User.query.filter_by(username=username).first()
+    if not other or not me or other.username == me.username:
+        flash('Uživatel nenalezen', 'danger')
+        return redirect(url_for('messages'))
+
+    send_form = MessageForm()
+    if send_form.validate_on_submit():
+        msg = Message(sender_id=me.id, receiver_id=other.id, content=send_form.message.data.strip())
+        if msg.content:
+            db.session.add(msg)
+            db.session.commit()
+            return redirect(url_for('messages_thread', username=other.username))
+
+    # Load conversation (both directions)
+    msgs = Message.query.filter(
+        or_(
+            and_(Message.sender_id == me.id, Message.receiver_id == other.id),
+            and_(Message.sender_id == other.id, Message.receiver_id == me.id)
+        )
+    ).order_by(Message.created_at.asc()).all()
+
+    # Search form on the left (optional query) and conversations list
+    search_form = SearchForm(request.args)
+    results = []
+    if 'q' in request.args and search_form.validate():
+        q = search_form.q.data.strip()
+        if q:
+            results = User.query.filter(User.username.like(f"%{q}%"), User.username != session['user']).order_by(User.username.asc()).all()
+    contacts = []
+    msgs_all = Message.query.filter(or_(Message.sender_id == me.id, Message.receiver_id == me.id)).order_by(Message.created_at.desc()).all()
+    latest_msg_map = {}
+    for m in msgs_all:
+        other_id = m.receiver_id if m.sender_id == me.id else m.sender_id
+        if other_id not in latest_msg_map:
+            latest_msg_map[other_id] = m
+    if latest_msg_map:
+        users = User.query.filter(User.id.in_(list(latest_msg_map.keys()))).all()
+        contacts = sorted(
+            (
+                {"user": u, "preview": latest_msg_map[u.id].content, "time": latest_msg_map[u.id].created_at, "from_me": latest_msg_map[u.id].sender_id == me.id}
+                for u in users
+            ),
+            key=lambda c: c["time"],
+            reverse=True,
+        )
+
+    return render_template('sites/messages.html', search=search_form, results=results, contacts=contacts, thread_user=other, messages=msgs, send_form=send_form, me_id=me.id)
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.username.data).first()
+        if user and check_password_hash(user.password_hash, form.password.data):
+            session['user'] = user.username
+            flash('Přihlášení úspěšné', 'success')
+            return redirect(url_for('index'))
+        flash('Neplatné přihlašovací údaje', 'danger')
+    return render_template('auth/login.html', form=form)
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    form = RegisterForm()
+    if form.validate_on_submit():
+        user = User(
+            username=form.username.data,
+            email=form.email.data,
+            gender=form.gender.data,
+            password_hash=generate_password_hash(form.password.data)
+        )
+        db.session.add(user)
         db.session.commit()
-        return redirect(url_for('admin'))
+        flash('Registrace úspěšná, přihlaste se', 'success')
+        return redirect(url_for('login'))
+    return render_template('auth/register.html', form=form)
 
 with app.app_context():
     # Auto-migrace: doplnění chybějících sloupců u stávající tabulky
@@ -358,6 +500,13 @@ with app.app_context():
             db.session.execute(text("ALTER TABLE form_data ADD COLUMN gender VARCHAR(10) NOT NULL DEFAULT 'muž'"))
         if 'message' not in cols:
             db.session.execute(text("ALTER TABLE form_data ADD COLUMN message TEXT NOT NULL DEFAULT ''"))
+        # Ensure User table has required columns if created previously without them
+        res_user = db.session.execute(text("PRAGMA table_info(user)"))
+        user_cols = {row[1] for row in res_user}
+        if 'email' not in user_cols:
+            db.session.execute(text("ALTER TABLE user ADD COLUMN email VARCHAR(128) NOT NULL DEFAULT ''"))
+        if 'gender' not in user_cols:
+            db.session.execute(text("ALTER TABLE user ADD COLUMN gender VARCHAR(10) NOT NULL DEFAULT 'muž'"))
         db.session.commit()
     except Exception:
         db.session.rollback()
