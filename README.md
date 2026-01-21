@@ -1,6 +1,7 @@
 # Flask Form App
 
 Jednoduchá Flask aplikace s formulářem (jméno, e‑mail, pohlaví, zpráva) ukládající data do perzistentní SQLite databáze a administrací pro zobrazení a mazání záznamů.
+Jednoduchy chat.
 
 ## Funkce
 - Formulář: jméno, e‑mail, pohlaví (muž/žena), zpráva; počítadlo znaků a spinner při odeslání.
